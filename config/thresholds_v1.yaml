@@ -1,0 +1,6 @@
+﻿detection_threshold: 0.70
+kill_switches:
+  timing_min_days: 30
+  timing_max_days: 365
+  pos_min: 0.25
+  tier2_runway_min_months: 12

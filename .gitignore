@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Artifacts & fixtures (generated, potentially large)
+artifacts/
+fixtures/
+backtest/fixtures/
+
+# Logs
+*.log

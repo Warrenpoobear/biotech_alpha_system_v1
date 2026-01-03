@@ -1,0 +1,189 @@
+﻿"""
+AGENT 4 INTEGRATION SCRIPT v1.0 (DETERMINISTIC)
+Maps Wake Robin DETECT signals to Agent 4 composite ranker format.
+"""
+import pandas as pd
+import json
+import hashlib
+from datetime import date
+from typing import Dict, List, Any
+import os
+
+def load_detections(detections_file: str) -> pd.DataFrame:
+    """Load detections CSV with LF-only encoding."""
+    return pd.read_csv(detections_file, encoding='utf-8')
+
+def map_to_agent4_format(detections_df: pd.DataFrame, as_of_date: date) -> List[Dict[str, Any]]:
+    """Map Wake Robin detections to Agent 4 composite ranker format."""
+    
+    agent4_signals = []
+    
+    for _, row in detections_df.iterrows():
+        # Create deterministic signal ID (based on ticker + date + score)
+        signal_input = f"{row['ticker']}_{as_of_date}_{row['alpha_score']:.4f}"
+        signal_hash = hashlib.sha256(signal_input.encode()).hexdigest()[:12]
+        
+        # Map to Agent 4 schema
+        agent4_signal = {
+            'security_id': row['ticker'],
+            'signal_date': as_of_date.isoformat(),
+            'signal_source': 'WAKE_ROBIN_v1',
+            'signal_id': f"A4_{signal_hash}",
+            
+            # Core signal metrics
+            'alpha_score': float(row['alpha_score']),
+            'confidence': min(1.0, float(row['alpha_score']) * 1.2),  # Scale slightly
+            
+            # Component mapping (if available)
+            'components': {},
+            
+            # Metadata for audit
+            'wake_robin_signal_id': row.get('signal_id', ''),
+            'detection_threshold': 0.70,
+            'tier': 'tier1',  # Default, would come from universe
+        }
+        
+        # Add component scores if they exist
+        if 'components' in row and isinstance(row['components'], str) and row['components'].strip():
+            try:
+                components = json.loads(row['components'])
+                agent4_signal['components'] = components
+            except:
+                pass
+        
+        agent4_signals.append(agent4_signal)
+    
+    return agent4_signals
+
+def save_agent4_output(signals: List[Dict[str, Any]], output_dir: str, as_of_date: date):
+    """Save Agent 4 formatted signals with deterministic encoding."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Sort by alpha_score descending and security_id ascending for deterministic order
+    signals_sorted = sorted(signals, key=lambda x: (-x['alpha_score'], x['security_id']))
+    
+    # Create DataFrame
+    df = pd.DataFrame(signals_sorted)
+    
+    # Save to CSV (LF-only)
+    csv_file = f"{output_dir}/agent4_signals_{as_of_date.isoformat()}.csv"
+    df.to_csv(csv_file, index=False, encoding='utf-8', lineterminator='\n')
+    
+    # Save to JSON (canonical format for hashing)
+    json_file = f"{output_dir}/agent4_signals_{as_of_date.isoformat()}.json"
+    
+    # Create canonical JSON (sorted keys, stable separators)
+    signals_for_json = []
+    for signal in signals_sorted:
+        # Remove any non-deterministic fields for JSON hash
+        signal_copy = signal.copy()
+        signals_for_json.append(signal_copy)
+    
+    with open(json_file, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(signals_for_json, f, indent=2, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        f.write("\n")
+    
+    # Create hash file
+    hash_input = json.dumps(signals_for_json, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    file_hash = hashlib.sha256(hash_input.encode()).hexdigest()
+    
+    hash_file = f"{output_dir}/agent4_hash_{as_of_date.isoformat()}.txt"
+    with open(hash_file, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(f"Agent 4 Signal Hash\n")
+        f.write(f"===================\n")
+        f.write(f"Date: {as_of_date.isoformat()}\n")
+        f.write(f"Signals: {len(signals)}\n")
+        f.write(f"Hash: {file_hash}\n")
+        f.write(f"\nCanonical JSON (first 1000 chars):\n")
+        f.write(hash_input[:1000])
+    
+    print(f"[OK] Agent 4 signals saved:")
+    print(f"   CSV: {csv_file}")
+    print(f"   JSON: {json_file}")
+    print(f"   Hash: {hash_file}")
+    print(f"   Signal count: {len(signals)}")
+    print(f"   Hash value: {file_hash[:16]}...")
+    
+    return {
+        'csv_file': csv_file,
+        'json_file': json_file,
+        'hash_file': hash_file,
+        'signal_count': len(signals),
+        'file_hash': file_hash
+    }
+
+def integrate_with_agent4(as_of_date: date = None):
+    """Main integration function."""
+    if as_of_date is None:
+        as_of_date = date(2024, 1, 15)
+    
+    print(f"\n{'='*70}")
+    print(f"AGENT 4 INTEGRATION - {as_of_date.isoformat()}")
+    print(f"{'='*70}")
+    
+    # 1. Find latest detections file
+    detections_pattern = f"output/weekly/detections_{as_of_date.isoformat()}.csv"
+    
+    if not os.path.exists(detections_pattern):
+        print(f"[FAIL] No detections found for {as_of_date.isoformat()}")
+        print(f"   Expected: {detections_pattern}")
+        return None
+    
+    # 2. Load detections
+    print("\n[1] Loading Wake Robin detections...")
+    detections_df = load_detections(detections_pattern)
+    print(f"   Found {len(detections_df)} DETECT signals")
+    
+    # 3. Map to Agent 4 format
+    print("\n[2] Mapping to Agent 4 format...")
+    agent4_signals = map_to_agent4_format(detections_df, as_of_date)
+    print(f"   Mapped {len(agent4_signals)} signals")
+    
+    # 4. Save Agent 4 output
+    print("\n[3] Saving Agent 4 output...")
+    output_dir = "output/agent4"
+    result = save_agent4_output(agent4_signals, output_dir, as_of_date)
+    
+    # 5. Print sample
+    print("\n[4] Sample signals (top 3):")
+    for i, signal in enumerate(agent4_signals[:3]):
+        print(f"   {i+1}. {signal['security_id']}:")
+        print(f"      Alpha Score: {signal['alpha_score']:.3f}")
+        print(f"      Confidence: {signal['confidence']:.3f}")
+        print(f"      Signal ID: {signal['signal_id']}")
+    
+    print(f"\n{'='*70}")
+    print(f"INTEGRATION COMPLETE")
+    print(f"{'='*70}")
+    
+    return result
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Agent 4 Integration')
+    parser.add_argument('--date', type=str, default='2024-01-15', help='Date (YYYY-MM-DD)')
+    
+    args = parser.parse_args()
+    
+    try:
+        as_of_date = date.fromisoformat(args.date)
+        result = integrate_with_agent4(as_of_date)
+        
+        if result:
+            return 0
+        else:
+            return 1
+            
+    except Exception as e:
+        print(f"[FAIL] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main())
+
+

@@ -1,0 +1,4 @@
+Hash: 20a98917856104eb30ee77006deb0ddecfb2b0e088e827b859a49af356bfa8c4
+Tickers: 24
+Snapshot: 2024-01-15
+Sources: XBI, IBB, NBI local snapshots

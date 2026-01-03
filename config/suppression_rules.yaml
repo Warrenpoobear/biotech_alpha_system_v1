@@ -1,0 +1,10 @@
+# v1 suppression / quarantine rules (minimal starter)
+required_sources:
+  - universe
+  - clinical_trials
+  - regulatory
+  - pricing
+
+quarantine_thresholds:
+  max_required_missing_pct: 0.30   # if required columns missingness exceeds => quarantine source
+  max_stale_days: 30               # if fixture declares extracted_at older than this => suppress (warn)

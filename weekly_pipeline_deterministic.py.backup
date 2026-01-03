@@ -1,0 +1,281 @@
+﻿"""
+WAKE ROBIN WEEKLY PIPELINE v1.0 (DETERMINISTIC)
+Runs with fixed snapshot date and LF-only output.
+"""
+import pandas as pd
+from datetime import date
+import hashlib
+import os
+import sys
+from typing import List, Dict, Any
+import json
+
+# Add src to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+# Import our deterministic universe
+from define_universe_v2 import get_universe_from_snapshots, save_deterministic_universe
+
+# Mock detector for now (we'll replace with real one)
+class DeterministicDetector:
+    """Mock deterministic detector for pilot."""
+    
+    def __init__(self):
+        self.detection_threshold = 0.70
+        
+    def detect(self, ticker: str, as_of_date: date) -> Dict[str, Any]:
+        """Deterministic detection based on ticker hash."""
+        # Use hash of ticker + date for deterministic scoring
+        input_str = f"{ticker}_{as_of_date.isoformat()}"
+        ticker_hash = int(hashlib.md5(input_str.encode()).hexdigest()[:8], 16)
+        
+        # Generate deterministic scores (0.0 to 1.0)
+        base_score = (ticker_hash % 10000) / 10000
+        score = 0.3 + (base_score * 0.7)  # Range: 0.3 to 1.0
+        
+        # Components (deterministic based on hash)
+        components = {
+            'catalyst_quality': (ticker_hash % 100) / 100,
+            'probability_adjusted': ((ticker_hash >> 8) % 100) / 100,
+            'risk_adjustment': ((ticker_hash >> 16) % 100) / 100,
+            'sentiment_momentum': ((ticker_hash >> 24) % 100) / 100
+        }
+        
+        decision = 'DETECT' if score >= self.detection_threshold else 'REJECT'
+        
+        # Deterministic hash for the signal
+        signal_hash_input = f"{ticker}_{as_of_date}_{score:.4f}_{decision}"
+        signal_hash = hashlib.sha256(signal_hash_input.encode()).hexdigest()[:16]
+        
+        return {
+            'ticker': ticker,
+            'as_of_date': as_of_date.isoformat(),
+            'score': round(score, 4),
+            'decision': decision,
+            'signal_id': f"SIG_{signal_hash}",
+            # store as canonical JSON string to avoid dict-string serialization drift in CSV
+            'components': json.dumps({k: round(v, 4) for k, v in components.items()},
+                                     sort_keys=True, separators=(",", ":"), ensure_ascii=False),
+            'detection_threshold': self.detection_threshold,
+        }
+
+def run_weekly_pipeline(snapshot_date: date = None) -> Dict[str, Any]:
+    """Run the full weekly pipeline with deterministic outputs."""
+    if snapshot_date is None:
+        snapshot_date = date(2024, 1, 15)  # Fixed for determinism
+    
+    print(f"\n{'='*70}")
+    print(f"WAKE ROBIN WEEKLY PIPELINE - {snapshot_date.isoformat()}")
+    print(f"{'='*70}")
+    
+    # 1. Load deterministic universe
+    print("\n[1] Loading deterministic universe...")
+    universe = get_universe_from_snapshots(snapshot_date)
+    tickers = universe['ticker'].tolist()
+    
+    # Get universe hash
+    universe_hash = universe['universe_hash'].iloc[0]
+    print(f"   Tickers: {len(tickers)}")
+    print(f"   Universe Hash: {universe_hash[:16]}...")
+    print(f"   Market Cap Range: ${universe['market_cap'].min():,.0f}M - ${universe['market_cap'].max():,.0f}M")
+    
+    # 2. Initialize detector
+    print("\n[2] Initializing detector...")
+    detector = DeterministicDetector()
+    print(f"   Detection Threshold: {detector.detection_threshold}")
+    
+    # 3. Run detection
+    print("\n[3] Running detection...")
+    signals = []
+    for ticker in tickers:
+        signal = detector.detect(ticker, snapshot_date)
+        signals.append(signal)
+    
+    # Convert to DataFrame
+    signals_df = pd.DataFrame(signals)
+    
+    # 4. Generate outputs
+    print("\n[4] Generating outputs...")
+    os.makedirs('output/weekly', exist_ok=True)
+    
+    # Filter detections and rejections
+    detections_df = signals_df[signals_df['decision'] == 'DETECT'].copy()
+    rejections_df = signals_df[signals_df['decision'] == 'REJECT'].copy()
+    
+    # Sort detections by score (descending) and ticker (ascending) for tie-breaking
+    if not detections_df.empty:
+        detections_df = detections_df.sort_values(['score', 'ticker'], ascending=[False, True])
+        detections_df['rank'] = range(1, len(detections_df) + 1)
+    
+    # Save with LF-only line endings
+    output_date_str = snapshot_date.isoformat()
+    
+    # Save detections
+    if not detections_df.empty:
+        detections_file = f'output/weekly/detections_{output_date_str}.csv'
+        detections_df.to_csv(detections_file, index=False, encoding='utf-8', lineterminator='\n')
+        print(f"   [OK] Detections: {len(detections_df)} -> {detections_file}")
+        
+        # Print top 5
+        print(f"   Top 5 by score:")
+        for _, row in detections_df.head(5).iterrows():
+            print(f"     {row['rank']:2d}. {row['ticker']}: {row['score']:.3f} ({row['signal_id'][:12]}...)")
+    
+    # Save rejections
+    if not rejections_df.empty:
+        rejections_file = f'output/weekly/rejections_{output_date_str}.csv'
+        rejections_df.to_csv(rejections_file, index=False, encoding='utf-8', lineterminator='\n')
+        print(f"   [OK] Rejections: {len(rejections_df)} -> {rejections_file}")
+    
+    # 5. Generate summary report
+    print("\n[5] Generating summary report...")
+    summary = {
+        'snapshot_date': snapshot_date.isoformat(),
+        'universe_hash': universe_hash,
+        'total_tickers': len(tickers),
+        'detections': len(detections_df),
+        'rejections': len(rejections_df),
+        'detection_rate': len(detections_df) / len(tickers) if tickers else 0,
+        'top_detection': detections_df.iloc[0]['ticker'] if not detections_df.empty else None,
+        'top_score': detections_df.iloc[0]['score'] if not detections_df.empty else None,
+        'universe_sources': {
+            'xbi_count': int(universe['in_xbi'].sum()),
+            'ibb_count': int(universe['in_ibb'].sum()),
+            'nbi_count': int(universe['in_nbi'].sum())
+        }
+    }
+    
+    # Save summary
+    summary_file = f'output/weekly/summary_{output_date_str}.json'
+    with open(summary_file, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(summary, f, indent=2, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        f.write("\n")
+    
+    print(f"   [OK] Summary saved: {summary_file}")
+    
+    # 6. Create audit hash
+    print("\n[6] Creating audit hash...")
+    
+    # Create deterministic audit hash from all outputs
+    audit_data = {
+        'universe_hash': universe_hash,
+        'ticker_count': len(tickers),
+        'detection_count': len(detections_df),
+        'snapshot_date': snapshot_date.isoformat()
+    }
+    
+    # Add sorted ticker list for hash
+    audit_data['tickers_sorted'] = sorted(tickers)
+    
+    # Create canonical JSON hash
+    audit_json = json.dumps(audit_data, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    audit_hash = hashlib.sha256(audit_json.encode()).hexdigest()
+    
+    audit_file = f'output/weekly/audit_{output_date_str}.txt'
+    with open(audit_file, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(f"Pipeline Audit Hash\n")
+        f.write(f"===================\n")
+        f.write(f"Date: {snapshot_date.isoformat()}\n")
+        f.write(f"Audit Hash: {audit_hash}\n")
+        f.write(f"Universe Hash: {universe_hash}\n")
+        f.write(f"Tickers: {len(tickers)}\n")
+        f.write(f"Detections: {len(detections_df)}\n")
+        f.write(f"Detection Rate: {summary['detection_rate']:.1%}\n")
+        f.write(f"\nCanonical JSON for verification:\n")
+        f.write(audit_json)
+    
+    print(f"   [OK] Audit hash saved: {audit_file}")
+    print(f"   Audit Hash: {audit_hash[:16]}...")
+    
+    print(f"\n{'='*70}")
+    print(f"WEEKLY PIPELINE COMPLETE")
+    print(f"{'='*70}")
+    
+    return {
+        'status': 'success',
+        'summary': summary,
+        'audit_hash': audit_hash,
+        'detections_file': detections_file if not detections_df.empty else None,
+        'rejections_file': rejections_file if not rejections_df.empty else None
+    }
+
+def sha256_bytes(p: str) -> str:
+    """Calculate SHA256 hash of file bytes."""
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        h.update(f.read())
+    return h.hexdigest()
+
+def verify_determinism():
+    """Run pipeline twice to verify determinism."""
+    print("=== DETERMINISM VERIFICATION ===")
+    print("Running pipeline twice with same inputs...")
+    
+    def run_and_hash():
+        """Run pipeline and return file hashes."""
+        run_weekly_pipeline(date(2024, 1, 15))
+        output_dir = "output/weekly"
+        files = sorted([f for f in os.listdir(output_dir) if f.endswith((".csv", ".json", ".txt"))])
+        return {fn: sha256_bytes(os.path.join(output_dir, fn)) for fn in files}
+    
+    print("\n--- Run 1 ---")
+    hashes1 = run_and_hash()
+    
+    print("\n--- Run 2 ---")
+    hashes2 = run_and_hash()
+    
+    print("\n=== FILE COMPARISON (SHA256) ===")
+    all_identical = True
+    for fn in sorted(hashes1.keys()):
+        ok = hashes1[fn] == hashes2[fn]
+        print(("[OK]" if ok else "[FAIL]") + f" {fn}")
+        all_identical = all_identical and ok
+    
+    if all_identical:
+        print("\n[OK] SUCCESS: Pipeline is fully deterministic")
+        return True
+    else:
+        print("\n[FAIL] FAILURE: Pipeline is non-deterministic")
+        return False
+
+def main():
+    """Main entry point."""
+    # For production: use actual date
+    # For testing: use fixed date for determinism
+    import argparse
+    parser = argparse.ArgumentParser(description='Wake Robin Weekly Pipeline')
+    parser.add_argument('--date', type=str, help='Snapshot date (YYYY-MM-DD)')
+    parser.add_argument('--verify', action='store_true', help='Verify determinism')
+    
+    args = parser.parse_args()
+    
+    if args.verify:
+        # Clean output directory before verification
+        import shutil
+        if os.path.exists('output/weekly'):
+            shutil.rmtree('output/weekly')
+        return 0 if verify_determinism() else 1
+    
+    if args.date:
+        snapshot_date = date.fromisoformat(args.date)
+    else:
+        # For now, use fixed date for testing
+        snapshot_date = date(2024, 1, 15)
+    
+    result = run_weekly_pipeline(snapshot_date)
+    
+    # Print final summary
+    print("\n[REPORT] FINAL SUMMARY:")
+    print(f"   Date: {result['summary']['snapshot_date']}")
+    print(f"   Universe: {result['summary']['total_tickers']} tickers")
+    print(f"   Detections: {result['summary']['detections']}")
+    print(f"   Detection Rate: {result['summary']['detection_rate']:.1%}")
+    
+    if result['summary']['top_detection']:
+        print(f"   Top Signal: {result['summary']['top_detection']} ({result['summary']['top_score']:.3f})")
+    
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())
+

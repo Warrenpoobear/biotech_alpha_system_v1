@@ -1,0 +1,19 @@
+﻿# WAKE ROBIN TIERED WEIGHTING SYSTEM v1.0
+# Tier 1: Signal Detection (high confidence, low false positive)
+# Tier 2: Position Sizing (risk-adjusted, portfolio construction)
+
+tier1_weights:
+  catalyst_setup: 0.15
+  probability_of_success: 0.15
+  payoff_asymmetry: 0.20
+  capital_risk: 0.10
+  data_coverage: 0.05
+  positioning_sentiment: 0.35
+
+tier2_weights:
+  catalyst_setup: 0.25
+  probability_of_success: 0.25
+  payoff_asymmetry: 0.20
+  capital_risk: 0.15
+  data_coverage: 0.05
+  positioning_sentiment: 0.10

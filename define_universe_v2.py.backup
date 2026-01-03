@@ -1,0 +1,33 @@
+﻿import pandas as pd
+import os
+import sys
+from datetime import datetime, date
+
+def get_universe_from_snapshots(snapshot_date):
+    """Load universe from the universe CSV file for the given date."""
+    # snapshot_date is in YYYYMMDD format, convert to YYYY-MM-DD for the filename
+    date_str = f"{snapshot_date[:4]}-{snapshot_date[4:6]}-{snapshot_date[6:]}"
+    universe_file = f"data/universe/biotech_universe_local_{date_str}.csv"
+    if not os.path.exists(universe_file):
+        raise FileNotFoundError(f"Universe file not found: {universe_file}")
+    df = pd.read_csv(universe_file)
+    return df['ticker'].tolist()
+
+if __name__ == "__main__":
+    # If a date is provided, use it; otherwise, use today
+    if len(sys.argv) > 1 and sys.argv[1] == '--date':
+        snapshot_date = datetime.strptime(sys.argv[2], "%Y-%m-%d").date()
+    else:
+        snapshot_date = date.today()
+
+    # Read the 2024-01-15 universe
+    old_universe = pd.read_csv("data/universe/biotech_universe_local_2024-01-15.csv")
+
+    # Update the snapshot_date column to the new date
+    old_universe['snapshot_date'] = snapshot_date.strftime("%Y-%m-%d")
+
+    # Save to the new date
+    output_file = f"data/universe/biotech_universe_local_{snapshot_date.strftime('%Y-%m-%d')}.csv"
+    old_universe.to_csv(output_file, index=False)
+    print(f"Universe saved to {output_file}")
+    print(f"Number of tickers: {len(old_universe)}")

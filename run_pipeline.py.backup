@@ -1,0 +1,130 @@
+"""Main pipeline execution script (end-to-end v1).
+
+Usage:
+  python run_pipeline.py --as-of 2024-01-01 --universe-version v1 --weights-version v1
+
+Design:
+  - Deterministic run_id from RunConfig
+  - Production run reads fixtures only (no network)
+  - Agent0 fail-loud gate
+  - Agents 1-4 produce artifacts in run directory
+"""
+
+from __future__ import annotations
+import argparse
+from datetime import date
+from pathlib import Path
+
+from src.determinism.run_id import RunConfig
+from src.determinism.validation import fail_if_quarantine
+from src.output.io import write_json
+from src.output.manifest_builder import build_manifest
+
+from src.agents.agent0_provenance_gate import ProvenanceGate
+from src.data.universe_builder import UniverseBuilder
+from src.agents.agent1_science_catalyst import ScienceCatalystAgent
+from src.agents.agent2a_pos import POSAgent
+from src.agents.agent2b_rnpv import RNPVAgent
+from src.agents.agent3_market_setup import MarketSetupAgent
+from src.agents.agent4_composite_ranker import CompositeRanker
+from src.output.dossier_generator import DossierGenerator
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Run biotech alpha pipeline (v1)")
+    ap.add_argument("--as-of", type=date.fromisoformat, required=True)
+    ap.add_argument("--universe-version", default="v1")
+    ap.add_argument("--weights-version", default="v1")
+    ap.add_argument("--code-version", default="local")
+    ap.add_argument("--fixtures", default="fixtures")
+    ap.add_argument("--artifacts", default="artifacts")
+    args = ap.parse_args()
+
+    cfg = RunConfig(
+        as_of=args.as_of,
+        universe_version=args.universe_version,
+        code_version=args.code_version,
+        weights_version=args.weights_version,
+    )
+
+    fixtures_base = Path(args.fixtures)
+    run_dir = Path(args.artifacts) / "runs" / cfg.to_run_id()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Agent 0
+    gate = ProvenanceGate(cfg, fixtures_base=fixtures_base, artifacts_dir=run_dir)
+    report = gate.run()
+    fail_if_quarantine(report)
+
+    # Universe
+    universe = UniverseBuilder(fixtures_base).load_universe(cfg.as_of)
+
+    # Agent 1
+    science = ScienceCatalystAgent(cfg, fixtures_base).run(universe.tickers)
+    for t, pkt in science.items():
+        write_json(run_dir / "science_packets" / f"{t}.json", pkt.model_dump(mode="json"))
+
+    # Agent 2A
+    pos_agent = POSAgent(cfg, sponsor_score=0.5)
+    pos = {t: pos_agent.run_one(science[t]) for t in universe.tickers}
+    for t, pkt in pos.items():
+        write_json(run_dir / "pos_packets" / f"{t}.json", pkt.model_dump(mode="json"))
+
+    # Agent 2B
+    rnpv_agent = RNPVAgent(cfg)
+    rnpv = {t: rnpv_agent.run_one(science[t], pos[t]) for t in universe.tickers}
+    for t, pkt in rnpv.items():
+        write_json(run_dir / "rnpv_packets" / f"{t}.json", pkt.model_dump(mode="json"))
+
+    # Agent 3
+    market = MarketSetupAgent(cfg, fixtures_base).run(universe.tickers)
+    for t, pkt in market.items():
+        write_json(run_dir / "market_packets" / f"{t}.json", pkt.model_dump(mode="json"))
+
+    # Agent 4
+    packets = {t: {"science": science[t], "pos": pos[t], "rnpv": rnpv[t], "market": market[t]} for t in universe.tickers}
+    results = CompositeRanker(cfg, fixtures_base).run(packets)
+    write_json(run_dir / "screen_results.json", results.model_dump(mode="json"))
+
+    # CSV output (deterministic)
+    import csv
+    csv_path = run_dir / "screen_results.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [r.model_dump(mode="json") for r in results.results]
+    # deterministic field order
+    fieldnames = list(rows[0].keys()) if rows else []
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in rows:
+            w.writerow(row)
+    # Dossiers (deterministic; IC memos)
+    dg = DossierGenerator()
+    dossiers_dir = run_dir.parent.parent / "dossiers"
+    dossiers_dir.mkdir(parents=True, exist_ok=True)
+    for r in results.results[: min(10, len(results.results))]:
+        memo_path = dossiers_dir / f"{r.ticker}_{cfg.as_of.isoformat()}.md"
+        dg.generate_one(
+            screen=r,
+            science=science[r.ticker],
+            pos=pos[r.ticker],
+            rnpv=rnpv[r.ticker],
+            market=market[r.ticker],
+            run_id=cfg.to_run_id(),
+            out_path=memo_path,
+        )
+
+    # Manifest
+    fix_dir = fixtures_base / f"asof={cfg.as_of.isoformat()}"
+    manifest = build_manifest(fix_dir, run_dir)
+    write_json(run_dir / "manifest.json", manifest)
+
+    print(f"OK Completed run_id={cfg.to_run_id()} -> {run_dir}")
+    if results.results:
+        top = results.results[:5]
+        print("Top picks:")
+        for i, r in enumerate(top, 1):
+            print(f"  {i}. {r.ticker} score={r.composite_score:.1f} driver={r.primary_driver}")
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
