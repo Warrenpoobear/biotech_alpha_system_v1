@@ -1,0 +1,15 @@
+# Design Quality Scoring Weights (v1)
+# Used by Agent 1 (Science & Catalyst) to score trial design quality
+# Total should sum to 1.0 for normalized scoring
+
+trial_design:
+  randomized: 0.20
+  controlled: 0.20
+  blinded: 0.15
+  powered: 0.15
+
+# Endpoint quality bonuses (only one applies, in priority order)
+endpoint:
+  overall_survival: 0.30    # OS endpoint
+  progression_free: 0.20    # PFS endpoint
+  objective_response: 0.10  # ORR endpoint

@@ -16,9 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+import yaml
 
 from src.determinism.run_id import RunConfig
 from src.determinism.fixtures import FixtureManager
@@ -58,22 +59,60 @@ def _phase_from_str(s: str) -> TrialPhase:
         return TrialPhase.phase4
     return TrialPhase.unknown
 
+def _load_design_quality_weights(path: Path) -> Dict[str, Any]:
+    """Load design quality weights from external config file."""
+    if path.exists():
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    # Fallback defaults if config file missing
+    return {
+        "trial_design": {"randomized": 0.20, "controlled": 0.20, "blinded": 0.15, "powered": 0.15},
+        "endpoint": {"overall_survival": 0.30, "progression_free": 0.20, "objective_response": 0.10}
+    }
+
+
+def _parse_bool_column(df: pd.DataFrame, col_name: str) -> Optional[bool]:
+    """Parse a boolean column from a DataFrame row, handling various string representations.
+
+    Args:
+        df: DataFrame (expects at least one row)
+        col_name: Column name to extract
+
+    Returns:
+        True/False if parseable, None if missing or unparseable
+    """
+    if len(df) == 0 or col_name not in df.columns:
+        return None
+    v = df.iloc[0].get(col_name, None)
+    if pd.isna(v):
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "y"):
+        return True
+    if s in ("false", "0", "no", "n"):
+        return False
+    return None
+
+
 @dataclass(frozen=True)
 class ScienceCatalystAgent:
     cfg: RunConfig
     fixtures_base: Path
+    dq_weights_path: Path = Path("config/design_quality_weights.yaml")
 
     def run(self, tickers: List[str]) -> Dict[str, SciencePacket]:
         fm = FixtureManager(self.fixtures_base)
         trials = fm.load_df(self.cfg.as_of, "clinical_trials")
         reg = fm.load_df(self.cfg.as_of, "regulatory")
+        dq_weights = _load_design_quality_weights(self.dq_weights_path)
 
         out: Dict[str, SciencePacket] = {}
         for t in sorted(tickers):
-            out[t] = self._packet_for_ticker(t, trials, reg)
+            out[t] = self._packet_for_ticker(t, trials, reg, dq_weights)
         return out
 
-    def _packet_for_ticker(self, ticker: str, trials: pd.DataFrame, reg: pd.DataFrame) -> SciencePacket:
+    def _packet_for_ticker(self, ticker: str, trials: pd.DataFrame, reg: pd.DataFrame, dq_weights: Dict[str, Any]) -> SciencePacket:
         tt = trials[trials["ticker"].astype(str).str.upper().str.strip() == ticker].copy()
         rr = reg[reg["ticker"].astype(str).str.upper().str.strip() == ticker].copy()
 
@@ -114,39 +153,28 @@ class ScienceCatalystAgent:
 
         # Design quality score heuristic (0-1); optional booleans if present
         dq = 0.0
-        def bcol(name: str) -> Optional[bool]:
-            if len(tt) == 0 or name not in tt.columns:
-                return None
-            v = tt.iloc[0].get(name, None)
-            if pd.isna(v):
-                return None
-            if isinstance(v, bool):
-                return v
-            s = str(v).strip().lower()
-            if s in ("true","1","yes","y"):
-                return True
-            if s in ("false","0","no","n"):
-                return False
-            return None
+        is_randomized = _parse_bool_column(tt, "is_randomized") or False
+        is_controlled = _parse_bool_column(tt, "is_controlled") or False
+        is_blinded = _parse_bool_column(tt, "is_blinded") or False
+        is_powered = _parse_bool_column(tt, "is_powered") or False
 
-        is_randomized = bcol("is_randomized") or False
-        is_controlled = bcol("is_controlled") or False
-        is_blinded = bcol("is_blinded") or False
-        is_powered = bcol("is_powered") or False
+        # Load weights from config (externalized for tuning)
+        td_weights = dq_weights.get("trial_design", {})
+        ep_weights = dq_weights.get("endpoint", {})
 
-        # score components
-        dq += 0.20 if is_randomized else 0.0
-        dq += 0.20 if is_controlled else 0.0
-        dq += 0.15 if is_blinded else 0.0
-        dq += 0.15 if is_powered else 0.0
+        # Score components using configurable weights
+        dq += td_weights.get("randomized", 0.20) if is_randomized else 0.0
+        dq += td_weights.get("controlled", 0.20) if is_controlled else 0.0
+        dq += td_weights.get("blinded", 0.15) if is_blinded else 0.0
+        dq += td_weights.get("powered", 0.15) if is_powered else 0.0
 
         ep = (primary_endpoint or "").lower()
         if "overall survival" in ep or ep.strip() == "os":
-            dq += 0.30
+            dq += ep_weights.get("overall_survival", 0.30)
         elif "pfs" in ep or "progression" in ep:
-            dq += 0.20
+            dq += ep_weights.get("progression_free", 0.20)
         elif "orr" in ep or "response" in ep:
-            dq += 0.10
+            dq += ep_weights.get("objective_response", 0.10)
 
         dq = max(0.0, min(1.0, dq))
         extraction_confidence = 0.5

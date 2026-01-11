@@ -10,6 +10,63 @@ import json
 import hashlib
 import argparse
 from pathlib import Path
+from typing import List, Optional
+
+from pydantic import BaseModel, Field, field_validator, ValidationError
+
+
+class DetectionRecord(BaseModel):
+    """Schema for validating detection records from Wake Robin."""
+    ticker: str = Field(..., min_length=1, max_length=10)
+    score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    alpha_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    signal_id: Optional[str] = None
+    date: Optional[str] = None
+    detection_type: Optional[str] = None
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, v: str) -> str:
+        return v.upper().strip()
+
+    def get_score_value(self) -> float:
+        """Get the score value, preferring 'score' over 'alpha_score'."""
+        if self.score is not None:
+            return self.score
+        if self.alpha_score is not None:
+            return self.alpha_score
+        raise ValueError("Detection must have 'score' or 'alpha_score'")
+
+    model_config = {"extra": "ignore"}
+
+
+def validate_detections_df(df: pd.DataFrame) -> List[DetectionRecord]:
+    """Validate DataFrame against DetectionRecord schema."""
+    if df.empty:
+        return []
+
+    # Check for required column
+    if "ticker" not in df.columns:
+        raise ValueError("Detection DataFrame must have 'ticker' column")
+
+    if "score" not in df.columns and "alpha_score" not in df.columns:
+        raise ValueError("Detection DataFrame must have 'score' or 'alpha_score' column")
+
+    validated_records = []
+    errors = []
+
+    for idx, row in df.iterrows():
+        try:
+            record = DetectionRecord(**row.to_dict())
+            validated_records.append(record)
+        except ValidationError as e:
+            errors.append(f"Row {idx}: {e}")
+
+    if errors:
+        raise ValueError(f"Validation failed for {len(errors)} rows:\n" + "\n".join(errors[:5]))
+
+    return validated_records
+
 
 def map_to_agent4_format(detections_df, as_of_date):
     """Map Wake Robin detections to Agent 4 format."""
@@ -56,13 +113,22 @@ def integrate_with_agent4(as_of_date):
     # [1] Load Wake Robin detections
     print(f"\n[1] Loading Wake Robin detections...")
     detections_file = f"output/weekly/detections_{date_str}.csv"
-    
+
     if not os.path.exists(detections_file):
         raise FileNotFoundError(f"Detections file not found: {detections_file}")
-    
+
     detections_df = pd.read_csv(detections_file)
     print(f"   Found {len(detections_df)} DETECT signals")
-    
+
+    # [1.5] Validate detection schema
+    print(f"\n[1.5] Validating detection schema...")
+    try:
+        validated_records = validate_detections_df(detections_df)
+        print(f"   Validated {len(validated_records)} records")
+    except ValueError as e:
+        print(f"   [ERROR] Schema validation failed: {e}")
+        raise
+
     # [2] Map to Agent 4 format
     print(f"\n[2] Mapping to Agent 4 format...")
     agent4_signals = map_to_agent4_format(detections_df, date_str)
