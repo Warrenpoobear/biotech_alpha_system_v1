@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Alpha Engine Schema",
+  "description": "Combined schema for all Alpha Engine artifacts",
+  "definitions": {
+    "MarketSnapshot": {
+      "type": "object",
+      "required": ["ticker", "as_of_date", "source_id", "input_hash", "schema_version"],
+      "properties": {
+        "ticker": {"type": "string", "pattern": "^[A-Z]+$"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "source_id": {"type": "string"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"type": "string"},
+        "price": {"type": ["number", "null"]},
+        "market_cap": {"type": ["number", "null"]},
+        "adv_usd": {"type": ["number", "null"]},
+        "spread_bps": {"type": ["number", "null"]},
+        "volume": {"type": ["number", "null"]},
+        "shares_outstanding": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "FinancialSnapshot": {
+      "type": "object",
+      "required": ["ticker", "as_of_date", "source_id", "input_hash", "schema_version"],
+      "properties": {
+        "ticker": {"type": "string", "pattern": "^[A-Z]+$"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "source_id": {"type": "string"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"type": "string"},
+        "runway_months": {"type": ["number", "null"]},
+        "cash_position": {"type": ["number", "null"]},
+        "burn_rate": {"type": ["number", "null"]},
+        "debt_to_equity": {"type": ["number", "null"]},
+        "current_ratio": {"type": ["number", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "ManagerPosition": {
+      "type": "object",
+      "required": ["manager_cik", "manager_name", "shares", "value_usd"],
+      "properties": {
+        "manager_cik": {"type": "string"},
+        "manager_name": {"type": "string"},
+        "shares": {"type": "integer"},
+        "value_usd": {"type": "number"},
+        "change_shares": {"type": ["integer", "null"]},
+        "change_pct": {"type": ["number", "null"]},
+        "filing_date": {"type": ["string", "null"], "format": "date"},
+        "is_new_position": {"type": "boolean"},
+        "is_closed_position": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "InstitutionalSnapshot": {
+      "type": "object",
+      "required": ["ticker", "as_of_date", "source_id", "input_hash", "schema_version"],
+      "properties": {
+        "ticker": {"type": "string", "pattern": "^[A-Z]+$"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "source_id": {"type": "string"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"type": "string"},
+        "total_institutional_shares": {"type": ["integer", "null"]},
+        "total_institutional_value": {"type": ["number", "null"]},
+        "manager_count": {"type": "integer"},
+        "net_buyers": {"type": "integer"},
+        "net_sellers": {"type": "integer"},
+        "new_positions": {"type": "integer"},
+        "closed_positions": {"type": "integer"},
+        "net_flow_kusd": {"type": ["number", "null"]},
+        "positions": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/ManagerPosition"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalystSnapshot": {
+      "type": "object",
+      "required": ["ticker", "as_of_date", "source_id", "input_hash", "schema_version"],
+      "properties": {
+        "ticker": {"type": "string", "pattern": "^[A-Z]+$"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "source_id": {"type": "string"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"type": "string"},
+        "next_catalyst_date": {"type": ["string", "null"], "format": "date"},
+        "next_catalyst_type": {"type": ["string", "null"]},
+        "next_catalyst_description": {"type": ["string", "null"]},
+        "days_to_catalyst": {"type": ["integer", "null"]},
+        "catalyst_count_90d": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "UniverseSnapshot": {
+      "type": "object",
+      "required": ["as_of_date", "source_id", "input_hash", "schema_version"],
+      "properties": {
+        "as_of_date": {"type": "string", "format": "date"},
+        "source_id": {"type": "string"},
+        "input_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "schema_version": {"type": "string"},
+        "tickers": {"type": "array", "items": {"type": "string"}},
+        "ticker_metadata": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "GateResult": {
+      "type": "object",
+      "required": ["ticker", "gate_name", "status"],
+      "properties": {
+        "ticker": {"type": "string"},
+        "gate_name": {"type": "string"},
+        "status": {"type": "string", "enum": ["PASSED", "FAILED", "UNKNOWN"]},
+        "threshold": {"type": ["number", "null"]},
+        "actual_value": {"type": ["number", "null"]},
+        "reason": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "ScoreCard": {
+      "type": "object",
+      "required": ["ticker", "as_of_date", "score_version", "parameters_hash", "run_id", "score_total", "status"],
+      "properties": {
+        "ticker": {"type": "string", "pattern": "^[A-Z]+$"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "score_version": {"type": "string"},
+        "parameters_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "run_id": {"type": "string"},
+        "score_total": {"type": "number", "minimum": 0, "maximum": 1},
+        "status": {"type": "string", "enum": ["SCORED", "REJECTED", "UNKNOWN"]},
+        "score_components": {"type": "object", "additionalProperties": {"type": "number"}},
+        "risk_flags": {"type": "array", "items": {"type": "string"}},
+        "passes_gates": {"type": "boolean"},
+        "gate_results": {"type": "array", "items": {"$ref": "#/definitions/GateResult"}},
+        "rejection_reasons": {"type": "array", "items": {"type": "string"}},
+        "input_hashes": {"type": "object", "additionalProperties": {"type": "string"}},
+        "output_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "AuditRecord": {
+      "type": "object",
+      "required": ["run_id", "as_of_date", "pipeline_version", "score_version", "parameters_hash", "status"],
+      "properties": {
+        "run_id": {"type": "string"},
+        "as_of_date": {"type": "string", "format": "date"},
+        "pipeline_version": {"type": "string"},
+        "score_version": {"type": "string"},
+        "parameters_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "input_hashes": {"type": "object", "additionalProperties": {"type": "string"}},
+        "output_hashes": {"type": "object", "additionalProperties": {"type": "string"}},
+        "cli_args": {"type": "object"},
+        "parameters": {"type": "object"},
+        "stage_counts": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "status": {"type": "string", "enum": ["COMPLETED", "FAILED", "PARTIAL"]},
+        "error_message": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    }
+  }
+}
