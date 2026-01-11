@@ -139,6 +139,9 @@ def _normalize_study_minimal(study: Dict[str, Any], *, ticker: str) -> Optional[
     ident = protocol.get("identificationModule", {}) or {}
     status = protocol.get("statusModule", {}) or {}
     design = protocol.get("designModule", {}) or {}
+    conditions = protocol.get("conditionsModule", {}) or {}
+    interventions = protocol.get("armsInterventionsModule", {}) or {}
+    outcomes = protocol.get("outcomesModule", {}) or {}
 
     nct_id = ident.get("nctId") or study.get("nctId")
     if not nct_id:
@@ -152,22 +155,96 @@ def _normalize_study_minimal(study: Dict[str, Any], *, ticker: str) -> Optional[
     phase = (design.get("phase") or "unknown").lower().replace(" ", "")
     overall_status = status.get("overallStatus") or ""
 
-    # Minimal deterministic record.
+    # Extract drug name from interventions (first DRUG type)
+    drug_name = _extract_drug_name(interventions)
+
+    # Extract primary indication from conditions
+    indication = _extract_indication(conditions)
+
+    # Extract primary endpoint from outcomes
+    primary_endpoint = _extract_primary_endpoint(outcomes)
+
+    # Determine blinding from design info
+    masking = design.get("maskingInfo", {}) or {}
+    is_blinded = _is_blinded(masking)
+
+    # Determine if controlled (has comparator arm)
+    is_controlled = _is_controlled(interventions, design)
+
+    # Check if powered (enrollment target exists)
+    enrollment = design.get("enrollmentInfo", {}) or {}
+    is_powered = bool(enrollment.get("count") and int(enrollment.get("count", 0)) >= 50)
+
     return {
         "ticker": ticker,
         "nct_id": str(nct_id),
         "phase": str(phase),
         "status": str(overall_status),
         "completion_date": completion,
-        # Optional fields (Agent 1 will default if missing)
-        "drug_name": "",
-        "indication": "",
-        "primary_endpoint": "",
+        "drug_name": drug_name,
+        "indication": indication,
+        "primary_endpoint": primary_endpoint,
         "is_randomized": (design.get("designAllocation") == "RANDOMIZED"),
-        "is_controlled": False,
-        "is_blinded": False,
-        "is_powered": False,
+        "is_controlled": is_controlled,
+        "is_blinded": is_blinded,
+        "is_powered": is_powered,
     }
+
+
+def _extract_drug_name(interventions: Dict[str, Any]) -> str:
+    """Extract first drug intervention name."""
+    intervention_list = interventions.get("interventions", []) or []
+    for intv in intervention_list:
+        if intv.get("type", "").upper() in ("DRUG", "BIOLOGICAL"):
+            return str(intv.get("name", "")).strip()
+    # Fallback to first intervention of any type
+    if intervention_list:
+        return str(intervention_list[0].get("name", "")).strip()
+    return ""
+
+
+def _extract_indication(conditions: Dict[str, Any]) -> str:
+    """Extract primary condition/indication."""
+    condition_list = conditions.get("conditions", []) or []
+    if condition_list:
+        return str(condition_list[0]).strip()
+    return ""
+
+
+def _extract_primary_endpoint(outcomes: Dict[str, Any]) -> str:
+    """Extract primary outcome measure."""
+    primary = outcomes.get("primaryOutcomes", []) or []
+    if primary:
+        measure = primary[0].get("measure", "")
+        return str(measure).strip()[:200]  # Truncate long descriptions
+    return ""
+
+
+def _is_blinded(masking: Dict[str, Any]) -> bool:
+    """Determine if study is blinded from masking info."""
+    masking_type = (masking.get("masking") or "").upper()
+    if masking_type in ("DOUBLE", "TRIPLE", "QUADRUPLE"):
+        return True
+    who_masked = masking.get("whoMasked", []) or []
+    # If participants or investigators are masked, consider it blinded
+    return any(w.upper() in ("PARTICIPANT", "INVESTIGATOR") for w in who_masked)
+
+
+def _is_controlled(interventions: Dict[str, Any], design: Dict[str, Any]) -> bool:
+    """Determine if study has a control arm."""
+    # Check for placebo or control in interventions
+    intervention_list = interventions.get("interventions", []) or []
+    for intv in intervention_list:
+        name = (intv.get("name") or "").lower()
+        if "placebo" in name or "control" in name or "standard of care" in name:
+            return True
+    # Check arm groups for control
+    arms = interventions.get("armGroups", []) or []
+    for arm in arms:
+        arm_type = (arm.get("type") or "").upper()
+        if arm_type in ("PLACEBO_COMPARATOR", "ACTIVE_COMPARATOR", "NO_INTERVENTION"):
+            return True
+    return False
 
 
 def _date_struct_to_iso(ds: Dict[str, Any]) -> Optional[str]:
@@ -183,23 +260,97 @@ def _date_struct_to_iso(ds: Dict[str, Any]) -> Optional[str]:
 
 @dataclass(frozen=True)
 class DemoClinicalTrialsClient(ClinicalTrialsClient):
-    """Offline demo client (deterministic sample data)."""
+    """Offline demo client with realistic biotech trial data."""
+
+    # Sample trial data for major biotech tickers
+    SAMPLE_TRIALS: Dict[str, List[Dict[str, Any]]] = {
+        "MRNA": [
+            {"nct_id": "NCT04470427", "phase": "phase3", "status": "Active, not recruiting",
+             "completion_date": "2024-12-01", "drug_name": "mRNA-1273",
+             "indication": "COVID-19", "primary_endpoint": "Vaccine efficacy",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+            {"nct_id": "NCT05127434", "phase": "phase2", "status": "Recruiting",
+             "completion_date": "2025-06-01", "drug_name": "mRNA-4157",
+             "indication": "Melanoma", "primary_endpoint": "Recurrence-free survival",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+        ],
+        "GILD": [
+            {"nct_id": "NCT04280705", "phase": "phase3", "status": "Completed",
+             "completion_date": "2023-03-01", "drug_name": "Remdesivir",
+             "indication": "COVID-19", "primary_endpoint": "Time to recovery",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+            {"nct_id": "NCT04501952", "phase": "phase2", "status": "Recruiting",
+             "completion_date": "2025-01-01", "drug_name": "Lenacapavir",
+             "indication": "HIV-1 infection", "primary_endpoint": "Viral suppression",
+             "is_randomized": True, "is_controlled": True, "is_blinded": False, "is_powered": True},
+        ],
+        "VRTX": [
+            {"nct_id": "NCT04046315", "phase": "phase3", "status": "Active, not recruiting",
+             "completion_date": "2024-09-01", "drug_name": "VX-548",
+             "indication": "Acute pain", "primary_endpoint": "Pain intensity difference",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+        ],
+        "REGN": [
+            {"nct_id": "NCT04381936", "phase": "phase3", "status": "Completed",
+             "completion_date": "2022-06-01", "drug_name": "REGEN-COV",
+             "indication": "COVID-19", "primary_endpoint": "Hospitalization or death",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+            {"nct_id": "NCT03985293", "phase": "phase3", "status": "Active, not recruiting",
+             "completion_date": "2024-12-01", "drug_name": "Dupixent",
+             "indication": "Atopic dermatitis", "primary_endpoint": "EASI-75 response",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+        ],
+        "BIIB": [
+            {"nct_id": "NCT03887455", "phase": "phase3", "status": "Active, not recruiting",
+             "completion_date": "2024-10-01", "drug_name": "Lecanemab",
+             "indication": "Alzheimer's disease", "primary_endpoint": "CDR-SB change",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+        ],
+        "ALNY": [
+            {"nct_id": "NCT04153149", "phase": "phase3", "status": "Recruiting",
+             "completion_date": "2025-03-01", "drug_name": "Patisiran",
+             "indication": "hATTR amyloidosis", "primary_endpoint": "mNIS+7 change",
+             "is_randomized": True, "is_controlled": True, "is_blinded": True, "is_powered": True},
+        ],
+        "BMRN": [
+            {"nct_id": "NCT03173144", "phase": "phase3", "status": "Active, not recruiting",
+             "completion_date": "2024-08-01", "drug_name": "Valoctocogene roxaparvovec",
+             "indication": "Hemophilia A", "primary_endpoint": "Factor VIII activity",
+             "is_randomized": False, "is_controlled": False, "is_blinded": False, "is_powered": True},
+        ],
+        "INCY": [
+            {"nct_id": "NCT04551066", "phase": "phase2", "status": "Recruiting",
+             "completion_date": "2025-06-01", "drug_name": "Parsaclisib",
+             "indication": "Follicular lymphoma", "primary_endpoint": "Objective response rate",
+             "is_randomized": True, "is_controlled": True, "is_blinded": False, "is_powered": True},
+        ],
+    }
+
     def fetch_trials(self, as_of: date, universe_df: pd.DataFrame) -> pd.DataFrame:
+        """Return sample trial data for demo/testing."""
         rows = []
         for _, r in universe_df.iterrows():
-            t = str(r["ticker"]).upper().strip()
-            rows.append({
-                "ticker": t,
-                "nct_id": "NCT12345678" if t == "AAA" else "NCT87654321",
-                "phase": "phase2" if t == "AAA" else "phase1",
-                "status": "Recruiting",
-                "completion_date": "2024-06-01" if t == "AAA" else "2024-09-01",
-                "drug_name": "DrugX" if t == "AAA" else "DrugY",
-                "indication": "oncology",
-                "primary_endpoint": "PFS",
-                "is_randomized": True if t == "AAA" else False,
-                "is_controlled": True if t == "AAA" else False,
-                "is_blinded": False,
-                "is_powered": False,
-            })
-        return pd.DataFrame(rows)
+            ticker = str(r["ticker"]).upper().strip()
+            if ticker in self.SAMPLE_TRIALS:
+                for trial in self.SAMPLE_TRIALS[ticker]:
+                    rows.append({"ticker": ticker, **trial})
+            else:
+                # Generate placeholder trial for unknown tickers
+                rows.append({
+                    "ticker": ticker,
+                    "nct_id": f"NCT{hash(ticker) % 100000000:08d}",
+                    "phase": "phase2",
+                    "status": "Recruiting",
+                    "completion_date": "2025-06-01",
+                    "drug_name": f"{ticker}-001",
+                    "indication": "Oncology",
+                    "primary_endpoint": "Overall response rate",
+                    "is_randomized": True,
+                    "is_controlled": True,
+                    "is_blinded": False,
+                    "is_powered": True,
+                })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            df = df.sort_values(["ticker", "nct_id"], kind="mergesort").reset_index(drop=True)
+        return df
