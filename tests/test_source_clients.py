@@ -437,3 +437,135 @@ class TestNormalizeStudy:
         assert result["drug_name"] == ""
         assert result["indication"] == ""
         assert result["is_randomized"] is False
+
+
+from src.data.source_clients.sec_edgar_client import (
+    DemoSECEdgarClient,
+    SECEdgarClient,
+    SECEdgarFileClient,
+)
+
+
+class TestSECEdgarClient:
+    """Tests for SEC EDGAR client."""
+
+    def test_demo_client_returns_data_for_known_tickers(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA", "GILD", "VRTX"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) >= 3  # At least one filing per ticker
+        tickers = set(result["ticker"].tolist())
+        assert "MRNA" in tickers
+        assert "GILD" in tickers
+        assert "VRTX" in tickers
+
+    def test_demo_client_includes_required_columns(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        required_cols = ["ticker", "filing_type", "filing_date", "filer_name",
+                         "transaction_type", "shares", "value_usd", "description"]
+        for col in required_cols:
+            assert col in result.columns, f"Missing column: {col}"
+
+    def test_demo_client_mrna_filings(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 3  # MRNA has 3 sample filings
+        filing_types = set(result["filing_type"].tolist())
+        assert "13F-HR" in filing_types
+        assert "4" in filing_types
+        assert "8-K" in filing_types
+
+    def test_demo_client_unknown_ticker(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["UNKNOWN"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 0  # No filings for unknown ticker
+
+    def test_demo_client_sorts_by_ticker_and_date(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["REGN", "GILD", "MRNA"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        # Should be sorted by ticker then filing_date
+        tickers = result["ticker"].tolist()
+        assert tickers == sorted(tickers)
+
+    def test_demo_client_has_insider_transactions(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA", "GILD", "ALNY"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        # Filter to Form 4 filings
+        form4s = result[result["filing_type"] == "4"]
+        assert len(form4s) >= 2
+
+        # Check transaction types
+        tx_types = set(form4s["transaction_type"].tolist())
+        assert "SELL" in tx_types or "BUY" in tx_types or "GRANT" in tx_types
+
+    def test_demo_client_has_institutional_holdings(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA", "GILD", "VRTX"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        # Filter to 13F filings
+        f13s = result[result["filing_type"] == "13F-HR"]
+        assert len(f13s) >= 2
+
+        # Check that share counts are present
+        for _, row in f13s.iterrows():
+            assert row["shares"] is not None
+            assert row["shares"] > 0
+
+    def test_demo_client_has_material_events(self):
+        client = DemoSECEdgarClient()
+        universe = pd.DataFrame({"ticker": ["MRNA", "VRTX", "BIIB"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        # Filter to 8-K filings
+        f8ks = result[result["filing_type"] == "8-K"]
+        assert len(f8ks) >= 2
+
+        # Check transaction type
+        for _, row in f8ks.iterrows():
+            assert row["transaction_type"] == "MATERIAL_EVENT"
+
+    def test_file_client_empty_data_dir(self, tmp_path):
+        client = SECEdgarFileClient(data_dir=tmp_path)
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 0
+        assert "ticker" in result.columns
+
+    def test_file_client_loads_from_csv(self, tmp_path):
+        # Create a sample filings file
+        filings_file = tmp_path / "filings_latest.csv"
+        filings_file.write_text(
+            "ticker,filing_type,filing_date,filer_name,transaction_type,shares,value_usd,description\n"
+            "MRNA,4,2024-01-15,Test Insider,SELL,10000,1000000,Test sale\n"
+        )
+
+        client = SECEdgarFileClient(data_dir=tmp_path)
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_filings(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 1
+        assert result.iloc[0]["filing_type"] == "4"
+        assert result.iloc[0]["shares"] == 10000
+
+    def test_infer_transaction_type(self):
+        # Test the static method for inferring transaction types
+        assert SECEdgarClient._infer_transaction_type("13F-HR") == "INSTITUTIONAL_HOLDING"
+        assert SECEdgarClient._infer_transaction_type("13F-HR/A") == "INSTITUTIONAL_HOLDING"
+        assert SECEdgarClient._infer_transaction_type("4") == "INSIDER_TRANSACTION"
+        assert SECEdgarClient._infer_transaction_type("4/A") == "INSIDER_TRANSACTION"
+        assert SECEdgarClient._infer_transaction_type("8-K") == "MATERIAL_EVENT"
+        assert SECEdgarClient._infer_transaction_type("10-K") == "OTHER"

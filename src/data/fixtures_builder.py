@@ -49,12 +49,13 @@ class FixturesBuilder:
         trials_raw = ct.fetch_trials(as_of=as_of, universe_df=universe_df)
         reg_raw = fda.fetch_events(as_of=as_of, universe_df=universe_df)
         pricing_raw = mkt.fetch_pricing(as_of=as_of, universe_df=universe_df)
-        _ = sec.fetch_filings(as_of=as_of, universe_df=universe_df)  # not used in v1 pipeline yet
+        sec_raw = sec.fetch_filings(as_of=as_of, universe_df=universe_df)
 
         # 2) normalize (canonical column set)
         trials = self._normalize_trials(trials_raw)
         reg = self._normalize_regulatory(reg_raw)
         pricing = self._normalize_pricing(pricing_raw)
+        sec_filings = self._normalize_sec_filings(sec_raw)
 
         # 3) write fixtures (csv by default for portability)
         refs = {}
@@ -64,6 +65,8 @@ class FixturesBuilder:
         refs["regulatory"] = ref_reg.sha256
         ref_pricing = fm.create_df_fixture(pricing, as_of, "pricing", fmt="csv")
         refs["pricing"] = ref_pricing.sha256
+        ref_sec = fm.create_df_fixture(sec_filings, as_of, "sec_filings", fmt="csv")
+        refs["sec_filings"] = ref_sec.sha256
 
         # 4) deterministic build manifest
         manifest = {
@@ -115,4 +118,16 @@ class FixturesBuilder:
         out = df[cols].copy()
         out["ticker"] = out["ticker"].astype(str).str.upper().str.strip()
         out = out.sort_values(by=["ticker"], kind="mergesort").reset_index(drop=True)
+        return out
+
+    @staticmethod
+    def _normalize_sec_filings(df: pd.DataFrame) -> pd.DataFrame:
+        cols = ["ticker", "filing_type", "filing_date", "filer_name",
+                "transaction_type", "shares", "value_usd", "description"]
+        for c in cols:
+            if c not in df.columns:
+                df[c] = None
+        out = df[cols].copy()
+        out["ticker"] = out["ticker"].astype(str).str.upper().str.strip()
+        out = out.sort_values(by=["ticker", "filing_date", "filing_type"], kind="mergesort").reset_index(drop=True)
         return out
