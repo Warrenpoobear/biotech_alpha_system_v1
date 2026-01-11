@@ -70,6 +70,31 @@ def _load_design_quality_weights(path: Path) -> Dict[str, Any]:
     }
 
 
+def _parse_bool_column(df: pd.DataFrame, col_name: str) -> Optional[bool]:
+    """Parse a boolean column from a DataFrame row, handling various string representations.
+
+    Args:
+        df: DataFrame (expects at least one row)
+        col_name: Column name to extract
+
+    Returns:
+        True/False if parseable, None if missing or unparseable
+    """
+    if len(df) == 0 or col_name not in df.columns:
+        return None
+    v = df.iloc[0].get(col_name, None)
+    if pd.isna(v):
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "y"):
+        return True
+    if s in ("false", "0", "no", "n"):
+        return False
+    return None
+
+
 @dataclass(frozen=True)
 class ScienceCatalystAgent:
     cfg: RunConfig
@@ -128,25 +153,10 @@ class ScienceCatalystAgent:
 
         # Design quality score heuristic (0-1); optional booleans if present
         dq = 0.0
-        def bcol(name: str) -> Optional[bool]:
-            if len(tt) == 0 or name not in tt.columns:
-                return None
-            v = tt.iloc[0].get(name, None)
-            if pd.isna(v):
-                return None
-            if isinstance(v, bool):
-                return v
-            s = str(v).strip().lower()
-            if s in ("true","1","yes","y"):
-                return True
-            if s in ("false","0","no","n"):
-                return False
-            return None
-
-        is_randomized = bcol("is_randomized") or False
-        is_controlled = bcol("is_controlled") or False
-        is_blinded = bcol("is_blinded") or False
-        is_powered = bcol("is_powered") or False
+        is_randomized = _parse_bool_column(tt, "is_randomized") or False
+        is_controlled = _parse_bool_column(tt, "is_controlled") or False
+        is_blinded = _parse_bool_column(tt, "is_blinded") or False
+        is_powered = _parse_bool_column(tt, "is_powered") or False
 
         # Load weights from config (externalized for tuning)
         td_weights = dq_weights.get("trial_design", {})

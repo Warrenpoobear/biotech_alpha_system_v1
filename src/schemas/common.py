@@ -1,6 +1,15 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Literal, Optional
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
+
+
+class SuppressionSeverity(str, Enum):
+    """Severity levels for data quality suppression flags."""
+    info = "info"    # Informational only, no action needed
+    warn = "warn"    # Warning, data may be incomplete but usable
+    block = "block"  # Critical issue, should halt processing
+
 
 class ProvenanceRef(BaseModel):
     source: Literal["fixture","manual","api","sec","ctgov","market","other"] = "fixture"
@@ -12,7 +21,7 @@ class ProvenanceRef(BaseModel):
 
 class SuppressionFlag(BaseModel):
     code: str
-    severity: Literal["info","warn","block"] = "warn"
+    severity: Union[SuppressionSeverity, Literal["info", "warn", "block"]] = SuppressionSeverity.warn
     reason: str
     field: Optional[str] = None
 

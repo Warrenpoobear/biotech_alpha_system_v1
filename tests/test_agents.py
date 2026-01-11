@@ -9,8 +9,10 @@ from src.determinism.run_id import RunConfig
 from src.agents.agent1_science_catalyst import (
     _phase_from_str,
     _load_design_quality_weights,
+    _parse_bool_column,
     ScienceCatalystAgent,
 )
+from src.schemas.common import SuppressionSeverity, SuppressionFlag
 from src.agents.agent2a_pos import _map_indication_to_ta, BASE_RATES, POSAgent
 from src.agents.agent4_composite_ranker import (
     _clip,
@@ -250,3 +252,72 @@ class TestBaseRates:
     def test_unknown_phase_conservative(self):
         for ta in BASE_RATES["unknown"]:
             assert BASE_RATES["unknown"][ta] <= 0.35
+
+
+class TestParseBoolColumn:
+    """Tests for _parse_bool_column helper function."""
+
+    def test_empty_dataframe(self):
+        df = pd.DataFrame()
+        assert _parse_bool_column(df, "is_randomized") is None
+
+    def test_missing_column(self):
+        df = pd.DataFrame({"other_col": [True]})
+        assert _parse_bool_column(df, "is_randomized") is None
+
+    def test_boolean_true(self):
+        df = pd.DataFrame({"is_randomized": [True]})
+        assert _parse_bool_column(df, "is_randomized") is True
+
+    def test_boolean_false(self):
+        df = pd.DataFrame({"is_randomized": [False]})
+        assert _parse_bool_column(df, "is_randomized") is False
+
+    def test_string_true_variants(self):
+        for val in ["true", "True", "TRUE", "1", "yes", "Yes", "y", "Y"]:
+            df = pd.DataFrame({"col": [val]})
+            assert _parse_bool_column(df, "col") is True, f"Failed for {val}"
+
+    def test_string_false_variants(self):
+        for val in ["false", "False", "FALSE", "0", "no", "No", "n", "N"]:
+            df = pd.DataFrame({"col": [val]})
+            assert _parse_bool_column(df, "col") is False, f"Failed for {val}"
+
+    def test_unparseable_string(self):
+        df = pd.DataFrame({"col": ["maybe"]})
+        assert _parse_bool_column(df, "col") is None
+
+    def test_nan_value(self):
+        import numpy as np
+        df = pd.DataFrame({"col": [np.nan]})
+        assert _parse_bool_column(df, "col") is None
+
+
+class TestSuppressionSeverity:
+    """Tests for SuppressionSeverity enum."""
+
+    def test_enum_values(self):
+        assert SuppressionSeverity.info.value == "info"
+        assert SuppressionSeverity.warn.value == "warn"
+        assert SuppressionSeverity.block.value == "block"
+
+    def test_suppression_flag_with_enum(self):
+        flag = SuppressionFlag(
+            code="missing_data",
+            severity=SuppressionSeverity.warn,
+            reason="Data not available"
+        )
+        assert flag.severity == SuppressionSeverity.warn
+
+    def test_suppression_flag_with_string(self):
+        # Backward compatibility: string literals should still work
+        flag = SuppressionFlag(
+            code="missing_data",
+            severity="block",
+            reason="Critical data missing"
+        )
+        assert flag.severity == "block"
+
+    def test_default_severity_is_warn(self):
+        flag = SuppressionFlag(code="test", reason="test reason")
+        assert flag.severity == SuppressionSeverity.warn
