@@ -1,0 +1,92 @@
+# Sponsor Track Record Database v1
+# Historical success rates for major biotech sponsors
+# score: 0.0 (poor) to 1.0 (excellent) relative to industry average (0.5)
+# Based on historical approval rates, pipeline depth, and execution quality
+
+# Large Cap Biotech (Market Cap > $50B)
+large_cap:
+  AMGN:
+    name: "Amgen Inc."
+    score: 0.70
+    notes: "Strong execution, mature pipeline"
+  GILD:
+    name: "Gilead Sciences"
+    score: 0.65
+    notes: "HIV/HCV leader, oncology expansion"
+  REGN:
+    name: "Regeneron Pharmaceuticals"
+    score: 0.75
+    notes: "Excellent R&D productivity"
+  VRTX:
+    name: "Vertex Pharmaceuticals"
+    score: 0.80
+    notes: "CF franchise, gene editing pipeline"
+  BIIB:
+    name: "Biogen Inc."
+    score: 0.55
+    notes: "Alzheimer's uncertainty, MS franchise"
+  MRNA:
+    name: "Moderna Inc."
+    score: 0.60
+    notes: "mRNA platform, pipeline diversification"
+
+# Mid Cap Biotech ($10B - $50B)
+mid_cap:
+  ALNY:
+    name: "Alnylam Pharmaceuticals"
+    score: 0.70
+    notes: "RNAi leader, commercial execution"
+  SGEN:
+    name: "Seagen Inc."
+    score: 0.65
+    notes: "ADC pioneer (acquired by Pfizer)"
+  SRPT:
+    name: "Sarepta Therapeutics"
+    score: 0.60
+    notes: "Gene therapy, DMD focus"
+  BMRN:
+    name: "BioMarin Pharmaceutical"
+    score: 0.60
+    notes: "Rare disease specialist"
+  INCY:
+    name: "Incyte Corporation"
+    score: 0.55
+    notes: "JAK inhibitor franchise"
+  EXEL:
+    name: "Exelixis Inc."
+    score: 0.55
+    notes: "Cabozantinib franchise"
+
+# Small Cap Biotech ($2B - $10B)
+small_cap:
+  AKRO:
+    name: "Akero Therapeutics"
+    score: 0.50
+    notes: "NASH focus, Phase 2 data"
+  KRYS:
+    name: "Krystal Biotech"
+    score: 0.55
+    notes: "Gene therapy, first approval"
+  RCKT:
+    name: "Rocket Pharmaceuticals"
+    score: 0.50
+    notes: "Gene therapy pipeline"
+  BLUE:
+    name: "bluebird bio"
+    score: 0.45
+    notes: "Commercial challenges"
+  VERV:
+    name: "Verve Therapeutics"
+    score: 0.50
+    notes: "Gene editing for CV disease"
+
+# Default for unknown sponsors
+default:
+  score: 0.50
+  notes: "Industry average assumed"
+
+# Metadata
+_metadata:
+  version: "1.0"
+  last_updated: "2024-01-15"
+  source: "Historical FDA approval data, pipeline analysis"

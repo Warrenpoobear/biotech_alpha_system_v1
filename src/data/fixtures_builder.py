@@ -24,6 +24,7 @@ from src.output.io import write_json
 from src.data.source_clients.clinicaltrials_client import ClinicalTrialsClient, DemoClinicalTrialsClient
 from src.data.source_clients.fda_calendar_client import FDACalendarClient, DemoFDACalendarClient
 from src.data.source_clients.sec_edgar_client import SECEdgarClient, DemoSECEdgarClient
+from src.data.source_clients.market_data_client import MarketDataClient, DemoMarketDataClient
 
 @dataclass(frozen=True)
 class FixturesBuilder:
@@ -31,26 +32,29 @@ class FixturesBuilder:
     use_demo_clients: bool = True
     live_clinicaltrials: bool = False
 
-    def _clients(self) -> Tuple[ClinicalTrialsClient, FDACalendarClient, SECEdgarClient]:
+    def _clients(self) -> Tuple[ClinicalTrialsClient, FDACalendarClient, SECEdgarClient, MarketDataClient]:
         if self.use_demo_clients:
-            ct = ClinicalTrialsClient(live=True) if self.live_clinicaltrials else DemoClinicalTrialsClient()
-            return ct, DemoFDACalendarClient(), DemoSECEdgarClient()
-        # real mode (note: FDA/SEC remain stubs until you implement them)
-        return ClinicalTrialsClient(live=True), FDACalendarClient(), SECEdgarClient()
+            # Use live ClinicalTrials client if configured, otherwise demo
+            ct = ClinicalTrialsClient() if self.live_clinicaltrials else DemoClinicalTrialsClient()
+            return ct, DemoFDACalendarClient(), DemoSECEdgarClient(), DemoMarketDataClient()
+        # Production mode - all live clients
+        return ClinicalTrialsClient(), FDACalendarClient(), SECEdgarClient(), MarketDataClient()
 
     def build_fixtures_for_date(self, as_of: date, universe_df: pd.DataFrame) -> Dict[str, str]:
         """Build fixtures and return dict of {source: sha256}."""
         fm = FixtureManager(self.fixtures_base)
-        ct, fda, sec = self._clients()
+        ct, fda, sec, mkt = self._clients()
 
         # 1) fetch
         trials_raw = ct.fetch_trials(as_of=as_of, universe_df=universe_df)
         reg_raw = fda.fetch_events(as_of=as_of, universe_df=universe_df)
+        pricing_raw = mkt.fetch_pricing(as_of=as_of, universe_df=universe_df)
         _ = sec.fetch_filings(as_of=as_of, universe_df=universe_df)  # not used in v1 pipeline yet
 
         # 2) normalize (canonical column set)
         trials = self._normalize_trials(trials_raw)
         reg = self._normalize_regulatory(reg_raw)
+        pricing = self._normalize_pricing(pricing_raw)
 
         # 3) write fixtures (csv by default for portability)
         refs = {}
@@ -58,6 +62,8 @@ class FixturesBuilder:
         refs["clinical_trials"] = ref_trials.sha256
         ref_reg = fm.create_df_fixture(reg, as_of, "regulatory", fmt="csv")
         refs["regulatory"] = ref_reg.sha256
+        ref_pricing = fm.create_df_fixture(pricing, as_of, "pricing", fmt="csv")
+        refs["pricing"] = ref_pricing.sha256
 
         # 4) deterministic build manifest
         manifest = {
@@ -98,4 +104,15 @@ class FixturesBuilder:
         out = df[cols].copy()
         out["ticker"] = out["ticker"].astype(str).str.upper().str.strip()
         out = out.sort_values(by=["ticker","event_date","event_type"], kind="mergesort").reset_index(drop=True)
+        return out
+
+    @staticmethod
+    def _normalize_pricing(df: pd.DataFrame) -> pd.DataFrame:
+        cols = ["ticker", "close", "volume", "shares_outstanding"]
+        for c in cols:
+            if c not in df.columns:
+                df[c] = None
+        out = df[cols].copy()
+        out["ticker"] = out["ticker"].astype(str).str.upper().str.strip()
+        out = out.sort_values(by=["ticker"], kind="mergesort").reset_index(drop=True)
         return out
