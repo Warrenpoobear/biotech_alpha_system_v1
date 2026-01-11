@@ -142,7 +142,8 @@ def run_weekly_pipeline(snapshot_date):
     with open(audit_file, 'w') as f:
         f.write(f"Audit Hash: {audit_hash}\n")
         f.write(f"Date: {date_str}\n")
-        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        # Use snapshot_date for determinism (avoid wall-clock time)
+        f.write(f"Generated: {date_str} 00:00:00\n")
     print(f"   [OK] Audit hash saved: {audit_file}")
     print(f"   Audit Hash: {audit_hash[:16]}...")
     

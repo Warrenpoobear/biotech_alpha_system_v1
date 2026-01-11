@@ -100,11 +100,23 @@ class CompositeRanker:
     def run(self, packets: Dict[str, Dict[str, Any]]) -> ScreenResults:
         fm = FixtureManager(self.fixtures_base)
         univ = fm.load_df(self.cfg.as_of, "universe")
-        # market cap lookup
-        mcap = {}
-        if "market_cap" in univ.columns:
-            for _, r in univ.iterrows():
-                mcap[str(r["ticker"]).upper().strip()] = _safe_float(r.get("market_cap"), None)
+
+        # Pre-build lookup dictionaries for O(1) access (avoid O(n²) DataFrame filters)
+        mcap: Dict[str, Optional[float]] = {}
+        cash_lookup: Dict[str, Optional[float]] = {}
+        burn_lookup: Dict[str, Optional[float]] = {}
+        name_lookup: Dict[str, str] = {}
+
+        for _, r in univ.iterrows():
+            ticker_key = str(r["ticker"]).upper().strip()
+            if "market_cap" in univ.columns:
+                mcap[ticker_key] = _safe_float(r.get("market_cap"), None)
+            if "cash" in univ.columns:
+                cash_lookup[ticker_key] = _safe_float(r.get("cash"), None)
+            if "burn_rate" in univ.columns:
+                burn_lookup[ticker_key] = _safe_float(r.get("burn_rate"), None)
+            if "name" in univ.columns:
+                name_lookup[ticker_key] = str(r.get("name") or ticker_key)
 
         weights = self._weights()
         results: List[ScreenResult] = []
@@ -139,23 +151,16 @@ class CompositeRanker:
                 binary_risk = _clip(1.0 - (sp.catalyst_horizon_days / 180.0), 0.0, 1.0)
 
             # dilution risk: simplistic from cash/burn if present
-            # if missing => conservative mid
-            cash = burn = None
-            if "cash" in univ.columns:
-                cash = _safe_float(univ[univ["ticker"].astype(str).str.upper().str.strip()==ticker].iloc[0].get("cash"), None) if (univ["ticker"].astype(str).str.upper().str.strip()==ticker).any() else None
-            if "burn_rate" in univ.columns:
-                burn = _safe_float(univ[univ["ticker"].astype(str).str.upper().str.strip()==ticker].iloc[0].get("burn_rate"), None) if (univ["ticker"].astype(str).str.upper().str.strip()==ticker).any() else None
+            # if missing => conservative mid (use pre-built lookups for O(1) access)
+            cash = cash_lookup.get(ticker)
+            burn = burn_lookup.get(ticker)
             if cash and burn and burn > 0:
                 runway_months = cash / burn
                 dilution_risk = _clip(1.0 - (runway_months / 18.0), 0.0, 1.0)
             else:
                 dilution_risk = 0.4
 
-            name = ticker
-            if "name" in univ.columns:
-                match = univ[univ["ticker"].astype(str).str.upper().str.strip()==ticker]
-                if len(match) > 0:
-                    name = str(match.iloc[0].get("name") or ticker)
+            name = name_lookup.get(ticker, ticker)
 
             results.append(ScreenResult(
                 ticker=ticker,
