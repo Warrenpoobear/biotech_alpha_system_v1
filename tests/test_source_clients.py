@@ -211,3 +211,229 @@ large_cap:
 
         assert "AMGN" not in scores  # No score field
         assert scores["GILD"] == 0.65
+
+
+from src.data.source_clients.clinicaltrials_client import (
+    DemoClinicalTrialsClient,
+    _extract_drug_name,
+    _extract_indication,
+    _extract_primary_endpoint,
+    _is_blinded,
+    _is_controlled,
+    _normalize_study_minimal,
+)
+
+
+class TestClinicalTrialsClient:
+    """Tests for ClinicalTrials.gov client."""
+
+    def test_demo_client_returns_data_for_known_tickers(self):
+        client = DemoClinicalTrialsClient()
+        universe = pd.DataFrame({"ticker": ["MRNA", "GILD", "VRTX"]})
+        result = client.fetch_trials(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) >= 3  # At least one trial per ticker
+        tickers = set(result["ticker"].tolist())
+        assert "MRNA" in tickers
+        assert "GILD" in tickers
+        assert "VRTX" in tickers
+
+    def test_demo_client_includes_required_columns(self):
+        client = DemoClinicalTrialsClient()
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_trials(as_of=date(2024, 6, 1), universe_df=universe)
+
+        required_cols = ["ticker", "nct_id", "phase", "status", "completion_date",
+                         "drug_name", "indication", "primary_endpoint",
+                         "is_randomized", "is_controlled", "is_blinded", "is_powered"]
+        for col in required_cols:
+            assert col in result.columns, f"Missing column: {col}"
+
+    def test_demo_client_mrna_trials(self):
+        client = DemoClinicalTrialsClient()
+        universe = pd.DataFrame({"ticker": ["MRNA"]})
+        result = client.fetch_trials(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 2  # MRNA has 2 sample trials
+        nct_ids = result["nct_id"].tolist()
+        assert "NCT04470427" in nct_ids
+        assert "NCT05127434" in nct_ids
+
+    def test_demo_client_unknown_ticker(self):
+        client = DemoClinicalTrialsClient()
+        universe = pd.DataFrame({"ticker": ["UNKNOWN"]})
+        result = client.fetch_trials(as_of=date(2024, 6, 1), universe_df=universe)
+
+        assert len(result) == 1  # Gets placeholder trial
+        assert result.iloc[0]["drug_name"] == "UNKNOWN-001"
+
+    def test_demo_client_sorts_by_ticker_and_nct_id(self):
+        client = DemoClinicalTrialsClient()
+        universe = pd.DataFrame({"ticker": ["REGN", "GILD", "MRNA"]})
+        result = client.fetch_trials(as_of=date(2024, 6, 1), universe_df=universe)
+
+        # Should be sorted by ticker then nct_id
+        tickers = result["ticker"].tolist()
+        assert tickers == sorted(tickers)
+
+
+class TestClinicalTrialsFieldExtraction:
+    """Tests for CT.gov field extraction functions."""
+
+    def test_extract_drug_name_from_drug_intervention(self):
+        interventions = {
+            "interventions": [
+                {"type": "DRUG", "name": "Pembrolizumab"},
+                {"type": "PROCEDURE", "name": "Surgery"},
+            ]
+        }
+        assert _extract_drug_name(interventions) == "Pembrolizumab"
+
+    def test_extract_drug_name_from_biological(self):
+        interventions = {
+            "interventions": [
+                {"type": "BIOLOGICAL", "name": "CAR-T cells"},
+            ]
+        }
+        assert _extract_drug_name(interventions) == "CAR-T cells"
+
+    def test_extract_drug_name_fallback_to_first(self):
+        interventions = {
+            "interventions": [
+                {"type": "DEVICE", "name": "Medical device"},
+            ]
+        }
+        assert _extract_drug_name(interventions) == "Medical device"
+
+    def test_extract_drug_name_empty(self):
+        assert _extract_drug_name({}) == ""
+        assert _extract_drug_name({"interventions": []}) == ""
+
+    def test_extract_indication(self):
+        conditions = {"conditions": ["Non-Small Cell Lung Cancer", "NSCLC"]}
+        assert _extract_indication(conditions) == "Non-Small Cell Lung Cancer"
+
+    def test_extract_indication_empty(self):
+        assert _extract_indication({}) == ""
+        assert _extract_indication({"conditions": []}) == ""
+
+    def test_extract_primary_endpoint(self):
+        outcomes = {
+            "primaryOutcomes": [
+                {"measure": "Overall Survival (OS)"},
+                {"measure": "Progression-Free Survival"},
+            ]
+        }
+        assert _extract_primary_endpoint(outcomes) == "Overall Survival (OS)"
+
+    def test_extract_primary_endpoint_truncates_long_text(self):
+        long_measure = "A" * 300
+        outcomes = {"primaryOutcomes": [{"measure": long_measure}]}
+        result = _extract_primary_endpoint(outcomes)
+        assert len(result) == 200
+
+    def test_is_blinded_double(self):
+        masking = {"masking": "DOUBLE"}
+        assert _is_blinded(masking) is True
+
+    def test_is_blinded_quadruple(self):
+        masking = {"masking": "QUADRUPLE"}
+        assert _is_blinded(masking) is True
+
+    def test_is_blinded_by_who_masked(self):
+        masking = {"masking": "SINGLE", "whoMasked": ["PARTICIPANT"]}
+        assert _is_blinded(masking) is True
+
+    def test_is_blinded_open_label(self):
+        masking = {"masking": "NONE"}
+        assert _is_blinded(masking) is False
+
+    def test_is_controlled_placebo_in_name(self):
+        interventions = {
+            "interventions": [
+                {"name": "Study Drug"},
+                {"name": "Placebo"},
+            ]
+        }
+        assert _is_controlled(interventions, {}) is True
+
+    def test_is_controlled_by_arm_type(self):
+        interventions = {
+            "interventions": [{"name": "Study Drug"}],
+            "armGroups": [
+                {"type": "EXPERIMENTAL"},
+                {"type": "PLACEBO_COMPARATOR"},
+            ]
+        }
+        assert _is_controlled(interventions, {}) is True
+
+    def test_is_controlled_single_arm(self):
+        interventions = {
+            "interventions": [{"name": "Study Drug"}],
+            "armGroups": [{"type": "EXPERIMENTAL"}]
+        }
+        assert _is_controlled(interventions, {}) is False
+
+
+class TestNormalizeStudy:
+    """Tests for study normalization."""
+
+    def test_normalize_complete_study(self):
+        study = {
+            "protocolSection": {
+                "identificationModule": {"nctId": "NCT12345678"},
+                "statusModule": {
+                    "overallStatus": "Recruiting",
+                    "primaryCompletionDateStruct": {"year": 2025, "month": 6, "day": 15}
+                },
+                "designModule": {
+                    "phase": "Phase 3",
+                    "designAllocation": "RANDOMIZED",
+                    "maskingInfo": {"masking": "DOUBLE"},
+                    "enrollmentInfo": {"count": 500}
+                },
+                "conditionsModule": {"conditions": ["Breast Cancer"]},
+                "armsInterventionsModule": {
+                    "interventions": [{"type": "DRUG", "name": "Trastuzumab"}],
+                    "armGroups": [{"type": "PLACEBO_COMPARATOR"}]
+                },
+                "outcomesModule": {
+                    "primaryOutcomes": [{"measure": "Overall Survival"}]
+                }
+            }
+        }
+
+        result = _normalize_study_minimal(study, ticker="RHHBY")
+
+        assert result["ticker"] == "RHHBY"
+        assert result["nct_id"] == "NCT12345678"
+        assert result["phase"] == "phase3"
+        assert result["status"] == "Recruiting"
+        assert result["completion_date"] == "2025-06-15"
+        assert result["drug_name"] == "Trastuzumab"
+        assert result["indication"] == "Breast Cancer"
+        assert result["primary_endpoint"] == "Overall Survival"
+        assert result["is_randomized"] is True
+        assert result["is_controlled"] is True
+        assert result["is_blinded"] is True
+        assert result["is_powered"] is True
+
+    def test_normalize_missing_nct_id(self):
+        study = {"protocolSection": {"identificationModule": {}}}
+        result = _normalize_study_minimal(study, ticker="TEST")
+        assert result is None
+
+    def test_normalize_minimal_study(self):
+        study = {
+            "protocolSection": {
+                "identificationModule": {"nctId": "NCT99999999"},
+                "statusModule": {"overallStatus": "Unknown"},
+                "designModule": {}
+            }
+        }
+        result = _normalize_study_minimal(study, ticker="TEST")
+
+        assert result["nct_id"] == "NCT99999999"
+        assert result["drug_name"] == ""
+        assert result["indication"] == ""
+        assert result["is_randomized"] is False
