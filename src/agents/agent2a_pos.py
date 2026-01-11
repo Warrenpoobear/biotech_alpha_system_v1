@@ -9,11 +9,15 @@ Output:
 Notes:
   - Uses static base rates by phase & therapeutic area (TA proxy from indication string).
   - Applies deterministic adjustments for design quality and sponsor score.
+  - Sponsor scores loaded from config/sponsor_track_record.yaml
 """
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 from src.determinism.run_id import RunConfig
 from src.determinism.hashing import deterministic_hash
@@ -47,10 +51,43 @@ BASE_RATES = {
 def _phase_key(p: TrialPhase) -> str:
     return p.value if p else "unknown"
 
+
+def _load_sponsor_track_record(path: Path) -> Dict[str, float]:
+    """Load sponsor track record scores from YAML config.
+
+    Returns dict mapping ticker -> score (0.0 to 1.0).
+    Default score is 0.5 (industry average) for unknown sponsors.
+    """
+    if not path.exists():
+        return {}
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not data:
+        return {}
+
+    scores: Dict[str, float] = {}
+
+    # Process each tier
+    for tier in ["large_cap", "mid_cap", "small_cap"]:
+        tier_data = data.get(tier, {})
+        for ticker, info in tier_data.items():
+            if isinstance(info, dict) and "score" in info:
+                scores[ticker.upper()] = float(info["score"])
+
+    return scores
+
+
 @dataclass(frozen=True)
 class POSAgent:
     cfg: RunConfig
-    sponsor_score: float = 0.5  # v1 placeholder (0-1)
+    sponsor_scores_path: Path = Path("config/sponsor_track_record.yaml")
+    _sponsor_scores: Optional[Dict[str, float]] = None
+
+    def _get_sponsor_score(self, ticker: str) -> float:
+        """Get sponsor score for ticker, defaulting to 0.5 if unknown."""
+        # Load scores on first access (lazy loading)
+        scores = _load_sponsor_track_record(self.sponsor_scores_path)
+        return scores.get(ticker.upper(), 0.5)
 
     def run_one(self, sp: SciencePacket) -> PoSPacket:
         ta = _map_indication_to_ta(sp.indication)
@@ -61,8 +98,10 @@ class POSAgent:
         design_delta = (sp.data_quality_score - 0.5) * 0.15
         adjustments.append(PoSAdjustment(name="design_quality", delta=design_delta, rationale="trial design quality vs neutral 0.5"))
 
-        sponsor_delta = (self.sponsor_score - 0.5) * 0.10
-        adjustments.append(PoSAdjustment(name="sponsor_track", delta=sponsor_delta, rationale="sponsor score vs neutral 0.5"))
+        # Sponsor track record adjustment (loaded from config)
+        sponsor_score = self._get_sponsor_score(sp.ticker)
+        sponsor_delta = (sponsor_score - 0.5) * 0.10
+        adjustments.append(PoSAdjustment(name="sponsor_track", delta=sponsor_delta, rationale=f"sponsor score {sponsor_score:.2f} vs neutral 0.5"))
 
         pos = base + sum(a.delta for a in adjustments)
         pos = max(0.05, min(0.95, pos))
